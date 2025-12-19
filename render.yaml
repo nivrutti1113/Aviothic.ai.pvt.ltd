@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: aviothic-backend
+    env: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.7
+      - key: PORT
+        value: 8000
+
+  - type: web
+    name: aviothic-frontend
+    env: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./frontend/build
+    envVars:
+      - key: NODE_VERSION
+        value: 16.13.0

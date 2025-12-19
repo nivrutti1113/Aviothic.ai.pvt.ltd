@@ -1,0 +1,12 @@
+torch
+torchvision
+timm
+albumentations
+scikit-learn
+mlflow
+boto3
+pydicom
+opencv-python-headless
+pillow
+numpy
+optuna

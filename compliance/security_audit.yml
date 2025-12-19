@@ -1,0 +1,30 @@
+name: Security Audit & SBOM
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  trivy_scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install trivy
+        run: |
+          sudo apt-get update && sudo apt-get install -y wget
+          wget https://github.com/aquasecurity/trivy/releases/latest/download/trivy_0.41.0_Linux-64bit.deb
+          sudo dpkg -i trivy_0.41.0_Linux-64bit.deb
+      - name: Build Docker image
+        run: docker build -t aviothic-backend:ci .
+      - name: Run trivy image scan
+        run: trivy image --severity HIGH,CRITICAL aviothic-backend:ci || true
+      - name: Generate SBOM (cyclonedx)
+        run: |
+          pip install cyclonedx-bom
+          cyclonedx-bom -o sbom.xml
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: sbom.xml

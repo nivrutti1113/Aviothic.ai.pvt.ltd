@@ -1,0 +1,77 @@
+name: GPU Training Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  train-gpu:
+    runs-on: ubuntu-latest
+    
+    # Use GitHub Actions runner with GPU support
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r training/requirements-train.txt
+    
+    - name: Install CUDA toolkit
+      run: |
+        # Install CUDA drivers and toolkit
+        sudo apt-get update
+        sudo apt-get install -y cuda-drivers
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-ubuntu2004.pin
+        sudo mv cuda-ubuntu2004.pin /etc/apt/preferences.d/cuda-repository-pin-600
+        sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/7fa2af80.pub
+        sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/ /"
+        sudo apt-get update
+        sudo apt-get -y install cuda
+    
+    - name: Verify GPU availability
+      run: |
+        nvidia-smi
+        python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA devices: {torch.cuda.device_count()}')"
+    
+    - name: Run training script
+      run: |
+        python training/retrain.py \
+          --data_dir ./sample_data \
+          --output_dir ./model_output \
+          --epochs 5 \
+          --batch_size 16 \
+          --lr 1e-4 \
+          --device cuda \
+          --num_classes 2
+      env:
+        MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    
+    - name: Validate model
+      run: |
+        python training/validate.py \
+          --model_path ./model_output/best_model.pth \
+          --data_dir ./sample_data \
+          --device cuda
+      env:
+        MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+    
+    - name: Upload model artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: trained-model
+        path: ./model_output/
+    
+    - name: Notify on completion
+      run: |
+        echo "Training pipeline completed successfully!"
+        echo "Model artifacts available as GitHub Action artifact"
