@@ -56,6 +56,51 @@ class ClinicalDataset(Dataset):
         img_tensor = torch.tensor(img_arr).permute(2,0,1)
         return img_tensor, torch.tensor(label, dtype=torch.long)
 
+class MultiViewVinDrDataset(Dataset):
+    """VinDr-Breast Multi-View Dataset:
+    - Inputs: Study folder containing [Left CC, Left MLO, Right CC, Right MLO]
+    - MONAI Transforms: High-precision medical imaging transforms
+    - Labels: BI-RADS classification (0-5)
+    """
+    def __init__(self, root_dir, df_metadata, image_size=224, transforms=None):
+        self.root = root_dir
+        self.df = df_metadata
+        self.image_size = image_size
+        
+        if transforms is None:
+            from monai import transforms as mt
+            self.transforms = mt.Compose([
+                mt.LoadImaged(keys=["img"]),
+                mt.ResizeWithPadOrCropd(keys=["img"], spatial_size=(image_size, image_size)),
+                mt.ScaleIntensityd(keys=["img"]),
+                mt.EnsureTyped(keys=["img"])
+            ])
+        else:
+            self.transforms = transforms
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        study_id = self.df.iloc[idx]['study_id']
+        label = int(self.df.iloc[idx]['overall_birads'].replace('BI-RADS ', ''))
+        
+        # In VinDr, each study has 4 images based on view/side
+        views = ['LEFT_CC', 'LEFT_MLO', 'RIGHT_CC', 'RIGHT_MLO']
+        view_tensors = []
+        
+        for view in views:
+            # Placeholder for path mapping logic based on VinDr CSV structure
+            img_path = os.path.join(self.root, f"{study_id}_{view}.png")
+            if not os.path.exists(img_path):
+                # Fallback to black image if view missing
+                view_tensors.append(torch.zeros(3, self.image_size, self.image_size))
+            else:
+                data = self.transforms({"img": img_path})
+                view_tensors.append(data["img"])
+                
+        return view_tensors, torch.tensor(label)
+
     def train_val_split(self, val_frac=0.2, seed=42):
         n = len(self.samples)
         idx = list(range(n))

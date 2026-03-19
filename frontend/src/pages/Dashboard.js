@@ -1,48 +1,64 @@
-import React, {useEffect, useState} from 'react';
-import { Line } from 'react-chartjs-2';
-import 'chart.js/auto';
+import React, { useEffect, useState } from 'react';
+import api from '../api';
 
-function Dashboard(){
-  const [history, setHistory] = useState([]);
+function Dashboard() {
+  const [predictions, setPredictions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  useEffect(()=>{
-    async function fetchHistory(){
-      try{
-        const res = await fetch('/history');
-        const json = await res.json();
-        setHistory(json);
-      }catch(e){
-        console.error(e);
+  useEffect(() => {
+    async function fetchPredictions() {
+      try {
+        const response = await api.get('/user/history');
+        setPredictions(response.data);
+        setLoading(false);
+      } catch (err) {
+        setError(err.message);
+        setLoading(false);
       }
     }
-    fetchHistory();
-  },[]);
+    fetchPredictions();
+  }, []);
 
-  // prepare chart data: simple count per day (demo)
-  const countsByDay = {};
-  history.forEach(h => {
-    const d = new Date(h.timestamp).toISOString().slice(0,10);
-    countsByDay[d] = (countsByDay[d] || 0) + 1;
-  });
-  const labels = Object.keys(countsByDay).sort();
-  const data = {
-    labels,
-    datasets: [
-      { label: 'Inferences per day', data: labels.map(l => countsByDay[l] || 0), fill: false }
-    ]
-  };
+  if (loading) return <div>Loading...</div>;
+  if (error) return <div>Error: {error}</div>;
 
-  return (<div style={{padding:20,fontFamily:'Arial'}}>
-    <h2>Aviothic.ai — Dashboard</h2>
-    <div style={{maxWidth:700}}><Line data={data} /></div>
-    <h3>Recent Cases</h3>
-    <table border="1" cellPadding="6">
-      <thead><tr><th>Case ID</th><th>Timestamp</th><th>Prediction</th></tr></thead>
-      <tbody>
-        {history.map(h => (<tr key={h._id}><td>{h.case_id}</td><td>{new Date(h.timestamp).toLocaleString()}</td><td>{h.prediction}</td></tr>))}
-      </tbody>
-    </table>
-  </div>);
+  return (
+    <div style={{ padding: 20, fontFamily: 'Arial' }}>
+      <h2>User Dashboard</h2>
+      <h3>Your Prediction History</h3>
+      {predictions.length === 0 ? (
+        <p>No predictions yet. Upload an image to get started.</p>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
+          {predictions.map(prediction => (
+            <div key={prediction.id} style={{ border: '1px solid #ccc', borderRadius: '8px', padding: '15px' }}>
+              <h4>Case: {prediction.case_id}</h4>
+              <p><strong>Prediction:</strong> {prediction.prediction}</p>
+              <p><strong>Confidence:</strong> {(prediction.confidence * 100).toFixed(2)}%</p>
+              <p><strong>Risk Score:</strong> {prediction.risk_score}/100</p>
+              <p><strong>Status:</strong> {prediction.doctor_status || 'Pending Review'}</p>
+              <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                <div>
+                  <p>Original Image:</p>
+                  <img src={prediction.image_url} alt="Uploaded" style={{ width: '100px', height: '100px', objectFit: 'cover' }} />
+                </div>
+                <div>
+                  <p>Grad-CAM:</p>
+                  <img src={prediction.gradcam_url} alt="Grad-CAM" style={{ width: '100px', height: '100px', objectFit: 'cover' }} />
+                </div>
+              </div>
+              <div style={{ marginTop: '10px' }}>
+                <a href={prediction.report_url} target="_blank" rel="noopener noreferrer" style={{ color: '#3B82F6', textDecoration: 'underline' }}>
+                  View PDF Report
+                </a>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default Dashboard;

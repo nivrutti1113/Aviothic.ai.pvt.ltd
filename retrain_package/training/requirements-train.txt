@@ -10,3 +10,6 @@ opencv-python-headless
 pillow
 numpy
 optuna
+monai
+ultralytics
+pandas

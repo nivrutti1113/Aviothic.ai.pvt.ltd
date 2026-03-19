@@ -15,6 +15,69 @@ def build_model(num_classes=2, pretrained=True):
     model.classifier[1] = nn.Linear(num_ftrs, num_classes)
     return model
 
+class BreastEnsemble(torch.nn.Module):
+    """Multi-view Ensemble Architecture:
+    - Inputs: 4 views (L CC, L MLO, R CC, R MLO)
+    - Ensemble: ViT + DenseNet + EfficientNet
+    - Outputs: BI-RADS classification (num_classes=6)
+    """
+    def __init__(self, num_classes=6, pretrained=True):
+        super(BreastEnsemble, self).__init__()
+        import timm
+        import torch.nn as nn
+        
+        # 1. Vision Transformer (ViT)
+        self.vit = timm.create_model('vit_base_patch16_224', pretrained=pretrained, num_classes=0)
+        self.vit_head = nn.Linear(self.vit.num_features * 4, 128) # 4 views
+        
+        # 2. DenseNet
+        self.densenet = timm.create_model('densenet121', pretrained=pretrained, num_classes=0)
+        self.dense_head = nn.Linear(self.densenet.num_features * 4, 128)
+        
+        # 3. EfficientNet
+        self.effnet = timm.create_model('efficientnet_b0', pretrained=pretrained, num_classes=0)
+        self.eff_head = nn.Linear(self.effnet.num_features * 4, 128)
+        
+        # Merge Ensemble
+        self.classifier = nn.Sequential(
+            nn.Linear(128 * 3, 256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, num_classes) # Final BI-RADS prediction
+        )
+
+    def forward(self, views):
+        """Forward pass for multi-view ensemble.
+        
+        Args:
+            views: List of 4 tensors [B, 3, 224, 224] for L-CC, L-MLO, R-CC, R-MLO
+        """
+        feats_vit = []
+        feats_dense = []
+        feats_eff = []
+        
+        for v in views:
+            feats_vit.append(self.vit(v))
+            feats_dense.append(self.densenet(v))
+            feats_eff.append(self.effnet(v))
+            
+        # Cat 4 views per case
+        v_vit = torch.cat(feats_vit, dim=1)
+        v_dense = torch.cat(feats_dense, dim=1)
+        v_eff = torch.cat(feats_eff, dim=1)
+        
+        # Pass through individual heads
+        h_vit = self.vit_head(v_vit)
+        h_dense = self.dense_head(v_dense)
+        h_eff = self.eff_head(v_eff)
+        
+        # Combine Ensemble
+        combined = torch.cat([h_vit, h_dense, h_eff], dim=1)
+        return self.classifier(combined)
+
+def build_ensemble(num_classes=6, pretrained=True):
+    return BreastEnsemble(num_classes=num_classes, pretrained=pretrained)
+
 def load_model_for_eval(path, device='cpu'):
     # expects a full state_dict or model saved via torch.save(model.state_dict())
     map_location = torch.device(device)

@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  # MongoDB service
+  mongodb:
+    image: mongo:6.0
+    container_name: aviothic_mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-password123}
+      MONGO_INITDB_DATABASE: aviothic_db
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    ports:
+      - "27017:27017"
+    networks:
+      - aviothic_network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  # Backend API service
+  backend:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: aviothic_backend
+    restart: unless-stopped
+    environment:
+      - MONGO_URI=mongodb://admin:${MONGO_ROOT_PASSWORD:-password123}@mongodb:27017/aviothic_db?authSource=admin
+      - MONGO_DB=aviothic_db
+      - SECRET_KEY=${SECRET_KEY:-your_production_secret_key_here_change_this}
+      - MODEL_PATH=/app/app/models/model.pt
+      - MODEL_VERSION=v1.0.0
+      - DEVICE=cpu
+      - DEBUG=False
+      - LOG_LEVEL=INFO
+      - HOST=0.0.0.0
+      - PORT=8000
+    volumes:
+      - ./app/models:/app/app/models:ro
+      - ./app/static:/app/app/static
+    ports:
+      - "8000:8000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - aviothic_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Frontend service (optional)
+  frontend:
+    image: node:18-alpine
+    container_name: aviothic_frontend
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - ../frontend:/app
+    ports:
+      - "3000:3000"
+    command: sh -c "npm install && npm run dev"
+    depends_on:
+      - backend
+    networks:
+      - aviothic_network
+
+volumes:
+  mongodb_data:
+    driver: local
+
+networks:
+  aviothic_network:
+    driver: bridge
