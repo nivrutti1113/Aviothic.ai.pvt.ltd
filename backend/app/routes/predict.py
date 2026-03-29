@@ -143,11 +143,29 @@ async def predict(request: Request,
     
     # Run inference
     try:
-        input_tensor = model_service.preprocess(img)
-        pred_index, probabilities, confidence, risk_score, explanation, birads, lesion, density, detections = model_service.predict(input_tensor, image_path=saved_path)
-        logger.info(f"Prediction completed for case {case_id}: class={pred_index}")
+        # Use predict_study for AIMS-style processing even for single image (fallbacks handle it)
+        # For single image, we repeat it 4 times for the multi-view architecture
+        study_views = [img] * 4
+        res = model_service.predict_study(study_views)
+        
+        pred_index = res['birads']
+        probabilities = [0.0] * 7 # Multi-view output is single category
+        confidence = res['cancer_probability']
+        risk_score = int(res['cancer_probability'] * 100)
+        explanation = res['explanation']
+        birads = str(res['birads'])
+        lesion = res['detections'][0]['class'] if res['detections'] else "None"
+        density = res['density']
+        detections = res['detections']
+        
+        # Get processed tensor for Grad-CAM
+        input_tensor, _ = model_service.preprocess(img)
+        
+        logger.info(f"Prediction completed for case {case_id}: BIRADS={pred_index}")
     except Exception as e:
         logger.error(f"Prediction failed for case {case_id}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Prediction failed: {str(e)}"
@@ -155,9 +173,10 @@ async def predict(request: Request,
     
     # Generate Grad-CAM visualization
     try:
+        # Pass the ensemble model and ensure input is wrapped for study
         gradcam_path = generate_gradcam(
-            model_service.model, 
-            input_tensor if not isinstance(model_service.model, BreastEnsemble) else [input_tensor]*4, 
+            model_service.ensemble, 
+            input_tensor.unsqueeze(1).repeat(1, 4, 1, 1, 1), # Study format: [B, 4, C, H, W]
             img, 
             target_class=pred_index
         )

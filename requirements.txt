@@ -15,3 +15,8 @@ monai
 ultralytics
 timm
 pandas
+pytorch-grad-cam
+albumentations
+scikit-learn
+scikit-image
+scipy

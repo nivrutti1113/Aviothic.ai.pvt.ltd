@@ -1,49 +1,92 @@
 version: '3.8'
 
 services:
-  backend:
+  # 1. Main AI Inference Platform (Backend)
+  ai-backend:
     build: ./backend
     ports:
       - "8000:8000"
     environment:
-      - MONGO_URI=mongodb://mongo:27017/aviothic_db
-      - SECRET_KEY=your_production_secret_key_here_change_this
-      - DEVICE=cpu
+      - MONGO_URI=mongodb://database:27017/aviothic_db
+      - SECRET_KEY=your_production_secret_key_here
+      - DEVICE=cpu # Use 'cuda' if GPU is available
     depends_on:
-      - mongo
+      - database
     volumes:
       - ./backend/app/static:/app/app/static
+      - ./backend/app/models:/app/app/models # Mount models for persistent weights
     restart: unless-stopped
+    networks:
+      - aviothic-net
 
-  mongo:
+  # 2. Hospital Portal Backend (Port 8001)
+  hospital-backend:
+    build: ./backend # Reusing base backend image for simplicity
+    command: uvicorn hospital_portal.backend.main:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      - MONGO_URI=mongodb://database:27017/aviothic_db
+      - HOSPITALS_DIR=/app/hospital_data
+    volumes:
+      - ./hospital_data:/app/hospital_data
+    networks:
+      - aviothic-net
+
+  # 3. Unified Frontend (Port 3000)
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000/api/v1
+      - REACT_APP_HOSPITAL_API_URL=http://localhost:8001
+    depends_on:
+      - ai-backend
+      - hospital-backend
+    restart: unless-stopped
+    networks:
+      - aviothic-net
+
+  # 4. Database (MongoDB)
+  database:
     image: mongo:5.0
     ports:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
     restart: unless-stopped
+    networks:
+      - aviothic-net
 
-  dicom_listener:
+  # 5. DICOM Ingestion Node (Port 11112)
+  dicom-node:
     build: 
-      context: .
-      dockerfile: backend/Dockerfile
+      context: ./backend
     command: python /app/integration/dicom_listener.py
     ports:
       - "11112:11112"
     environment:
-      - BACKEND_PREDICT_URL=http://backend:8000/api/v1/predict
+      - BACKEND_PREDICT_URL=http://ai-backend:8000/api/v1/predict
     depends_on:
-      - backend
+      - ai-backend
     restart: unless-stopped
+    networks:
+      - aviothic-net
 
-  fhir_server:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    command: uvicorn integration.fhir_server:app --host 0.0.0.0 --port 8001
+  # 6. FHIR/HL7 Reporting Node (Port 8002)
+  fhir-node:
+    build: ./backend
+    command: uvicorn integration.fhir_server:app --host 0.0.0.0 --port 8002
     ports:
-      - "8001:8001"
+      - "8002:8002"
     restart: unless-stopped
+    networks:
+      - aviothic-net
+
+networks:
+  aviothic-net:
+    driver: bridge
 
 volumes:
   mongo_data:

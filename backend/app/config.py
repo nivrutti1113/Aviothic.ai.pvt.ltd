@@ -15,8 +15,12 @@ class Settings(BaseSettings):
     MONGO_DB: str = "aviothic_db"
     
     # Model Configuration
-    MODEL_PATH: str = str(Path(__file__).parent / "models" / "model.pt")
-    MODEL_VERSION: str = "v1.0.0"
+    MODEL_PATH: str = str(Path(__file__).parent / "models" / "ensemble.pt")
+    DENSITY_MODEL_PATH: str = str(Path(__file__).parent / "models" / "density.pt")
+    LESION_MODEL_PATH: str = str(Path(__file__).parent / "models" / "lesion.pt")
+    YOLO_MODEL_PATH: str = str(Path(__file__).parent / "models" / "yolov8.pt")
+    CALC_PATCH_MODEL_PATH: str = str(Path(__file__).parent / "models" / "calc_patch.pt")
+    MODEL_VERSION: str = "v2.0.0-AIMS"
     
     # Storage Configuration
     STATIC_DIR: str = str(Path(__file__).parent / "static")

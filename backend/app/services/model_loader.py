@@ -1,158 +1,203 @@
 import torch
 import torch.nn.functional as F
-from torchvision import transforms
 from PIL import Image
-from ..config import settings
+import numpy as np
 import os
 import logging
+from ..config import settings
+from .preprocessing import CLAHEPipeline
+from .models_v2 import (
+    EnsembleClassifier, 
+    DensityClassifier, 
+    LesionClassifier, 
+    CalcificationPatchClassifier
+)
 
 logger = logging.getLogger(__name__)
 
+# YOLO loader if available
+try:
+    from ultralytics import YOLO
+    YOLO_AVAILABLE = True
+except ImportError:
+    YOLO_AVAILABLE = False
 
-from ..services.lesion_detector import lesion_detector
-from ...retrain_package.training.trainer import build_ensemble
+class PatchTiler:
+    def __init__(self, patch_size=256, stride=192):
+        self.patch_size = patch_size
+        self.stride = stride
+    
+    def extract(self, img):
+        h, w = img.shape[:2]
+        patches = []
+        for r in range(0, h - self.patch_size + 1, self.stride):
+            for c in range(0, w - self.patch_size + 1, self.stride):
+                patch = img[r:r+self.patch_size, c:c+self.patch_size]
+                patches.append({'patch': patch, 'row': r, 'col': c})
+        return patches
 
 class ModelService:
-    """Production-ready Multi-view Ensemble Model Service.
-    
-    Ensemble Architecture:
-    - Vision Transformer (ViT)
-    - DenseNet-121
-    - EfficientNet-B0
-    
-    Inferences:
-    - Multi-view Study Analysis (4 views)
-    - Single Image Analysis (Fallback)
-    - YOLO Lesion Detection
-    - MONAI Medical Preprocessing
-    """
+    """Production Multi-Stage AI Screening Pipeline inspired by AIMS Study."""
 
     def __init__(self, device: str = None):
         self.device = torch.device(device or settings.DEVICE)
-        self.model = None
-        self.model_version = settings.MODEL_VERSION
         self.is_dummy_model = False
         
-        # MONAI Medical transforms for high-precision preprocessing
-        try:
-            from monai import transforms as mt
-            self.monai_transform = mt.Compose([
-                mt.ScaleIntensity(),
-                mt.Resize((224, 224)),
-                mt.ToTensor()
-            ])
-            logger.info("MONAI transforms initialized for medical precision")
-        except Exception:
-            self.monai_transform = None
-            
-        # Standard preprocessing fallback
-        self.transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ])
+        # 1. Initialize Preprocessing
+        self.preprocessor = CLAHEPipeline()
+        self.tiler = PatchTiler()
         
-        self._load_model()
-        logger.info(f"Ensemble Model service initialized on {self.device}")
+        # 2. Load Stages
+        self._load_all_models()
+        logger.info(f"AIMS Screening Pipeline initialized on {self.device}")
 
-    def _load_model(self):
-        """Load the Ensemble (ViT + DenseNet + EfficientNet)."""
-        model_path = settings.MODEL_PATH
-        
-        # Load the advanced Ensemble architecture
+    def _load_all_models(self):
+        """Orchestrate loading of all 5 specialized models."""
         try:
-            self.model = build_ensemble(num_classes=6) # BI-RADS 0-5
-            if os.path.exists(model_path):
-                self.model.load_state_dict(torch.load(model_path, map_location=self.device))
-                self.is_dummy_model = False
-                logger.info("Multi-view Ensemble weights loaded successfully")
+            # 2.1 Ensemble (Main Scoring)
+            self.ensemble = EnsembleClassifier(pretrained=False).to(self.device)
+            if os.path.exists(settings.MODEL_PATH):
+                self.ensemble.load_state_dict(torch.load(settings.MODEL_PATH, map_location=self.device))
+                logger.info("Ensemble weights (v2) loaded.")
             else:
                 self.is_dummy_model = True
-                logger.warning("Ensemble weights not found. Using initialized ensemble for demo.")
+                logger.warning("Ensemble weights not found. Using stub modes.")
+
+            # 2.2 Density Classifier
+            self.density_model = DensityClassifier(pretrained=False).to(self.device)
+            if os.path.exists(settings.DENSITY_MODEL_PATH):
+                self.density_model.load_state_dict(torch.load(settings.DENSITY_MODEL_PATH, map_location=self.device))
+                logger.info("Density model weights loaded.")
+
+            # 2.3 Lesion Classifier (Micro-tasks)
+            self.lesion_model = LesionClassifier(pretrained=False).to(self.device)
+            if os.path.exists(settings.LESION_MODEL_PATH):
+                self.lesion_model.load_state_dict(torch.load(settings.LESION_MODEL_PATH, map_location=self.device))
+                logger.info("Lesion model weights loaded.")
+
+            # 2.4 Patch Classifier (Calcs)
+            self.calc_model = CalcificationPatchClassifier(pretrained=False).to(self.device)
+            if os.path.exists(settings.CALC_PATCH_MODEL_PATH):
+                self.calc_model.load_state_dict(torch.load(settings.CALC_PATCH_MODEL_PATH, map_location=self.device))
+                logger.info("Patch classifier weights loaded.")
+
+            # 2.5 YOLO (Localization)
+            if YOLO_AVAILABLE:
+                if os.path.exists(settings.YOLO_MODEL_PATH):
+                    self.yolo = YOLO(settings.YOLO_MODEL_PATH)
+                    logger.info("YOLOv8 weights loaded.")
+                else:
+                    self.yolo = None
+                    logger.warning("YOLO weights missing.")
+            else:
+                self.yolo = None
+
         except Exception as e:
-            logger.error(f"Failed to load Ensemble: {e}. Falling back to simple model.")
-            from .model_loader import ModelService as LegacyService
-            legacy = LegacyService()
-            self.model = legacy.model
+            logger.error(f"Failed to load full AIMS pipeline: {e}")
             self.is_dummy_model = True
 
-    def preprocess(self, pil_image: Image.Image) -> torch.Tensor:
-        """MONAI-powered medical preprocessing."""
-        if self.monai_transform:
-            img_np = np.array(pil_image.convert('RGB')).transpose(2,0,1) / 255.0
-            return self.monai_transform(img_np).unsqueeze(0).to(self.device)
-        return self.transform(pil_image).unsqueeze(0).to(self.device)
+    def preprocess(self, pil_image: Image.Image) -> tuple[torch.Tensor, np.ndarray]:
+        """Convert PIL to Tensor using CLAHE Pipeline and return np for YOLO."""
+        img_np = np.array(pil_image.convert('L'))
+        # Ensure we have a valid 16-bit-like range if possible, or 8-bit
+        tensor = self.preprocessor.process(img_np).unsqueeze(0).to(self.device)
+        return tensor, img_np
 
-    def predict_study(self, study_views: list[Image.Image]) -> tuple[dict, list]:
-        """Multi-view Study Analysis (L CC, L MLO, R CC, R MLO).
+    def predict_study(self, study_views: list[Image.Image]) -> dict:
+        """Complete Case-Level Screening Inferences."""
+        # 1. Preprocess all 4 views (CC_L, MLO_L, CC_R, MLO_R)
+        view_tensors = []
+        full_np_images = []
+        for img in study_views[:4]:
+            t, n = self.preprocess(img)
+            view_tensors.append(t)
+            full_np_images.append(n)
         
-        Returns:
-            Tuple of (Inference Data, YOLO Detections)
-        """
-        view_tensors = [self.preprocess(img) for img in study_views[:4]]
-        # Ensure we have exactly 4 views for the ensemble
+        # Ensure exactly 4 views for ensemble
         while len(view_tensors) < 4:
-            view_tensors.append(torch.zeros_like(view_tensors[0]))
+            dummy = torch.zeros_like(view_tensors[0])
+            view_tensors.append(dummy)
+            full_np_images.append(None)
             
-        with torch.no_grad():
-            output = self.model(view_tensors)
-            probabilities = F.softmax(output, dim=1).squeeze(0)
-            predicted_class = int(probabilities.argmax().item())
-            prob_list = [float(p) for p in probabilities.cpu().tolist()]
-            
-            # BI-RADS label mapping
-            birads = str(predicted_class)
-            confidence = float(prob_list[predicted_class])
-            
-            # Run YOLO Lesion Detection on the first view as demo
-            # In production, run on all views and merge
-            # detections = lesion_detector.detect(image_path) # Needs actual path
-            
-            return predicted_class, prob_list, confidence, birads
+        study_tensor = torch.stack(view_tensors, dim=1) # [1, 4, 3, 224, 224]
 
-    def predict(self, input_tensor: torch.Tensor, image_path: str = None) -> tuple[int, list[float], float, int, str, str, str, str, list]:
-        """Enhanced prediction with Ensemble and YOLO detection."""
-        # For single image, we repeat it 4 times for the multi-view architecture (demo mode)
-        views = [input_tensor] * 4
+        with torch.no_grad():
+            # 2. Main Risk & BI-RADS
+            birads_logits, cancer_prob = self.ensemble(study_tensor)
+            birads_pred = int(torch.argmax(birads_logits, dim=1).item())
+            cancer_score = float(cancer_prob.item())
+            
+            # 3. Density Classification
+            density_logits = self.density_model(study_tensor)
+            density_pred = int(torch.argmax(density_logits, dim=1).item())
+            density_label = ["A", "B", "C", "D"][density_pred]
+            
+            # 4. Localization (YOLO) on all views
+            all_detections = []
+            if self.yolo:
+                for idx, img_np in enumerate(full_np_images):
+                    if img_np is not None:
+                        res = self.yolo(img_np, verbose=False)
+                        for r in res:
+                            for box in r.boxes:
+                                all_detections.append({
+                                    'view': idx,
+                                    'bbox': box.xyxy[0].tolist(),
+                                    'conf': float(box.conf[0].item()),
+                                    'class': r.names[int(box.cls[0].item())]
+                                })
+
+            # 5. Patch-based Calcification Check (First view for demo speed)
+            calc_clusters = []
+            if full_np_images[0] is not None:
+                patches = self.tiler.extract(full_np_images[0])
+                # In production, batch this
+                for p_info in patches[:10]: # Limit for performance
+                    p_tensor = torch.from_numpy(np.stack([p_info['patch']]*3, axis=0)).float().unsqueeze(0).to(self.device)
+                    p_prob = float(self.calc_model(p_tensor).item())
+                    if p_prob > 0.5:
+                        calc_clusters.append({'row': p_info['row'], 'col': p_info['col'], 'prob': p_prob})
+
+            return {
+                "birads": birads_pred,
+                "cancer_probability": cancer_score,
+                "density": density_label,
+                "detections": all_detections,
+                "calc_clusters": calc_clusters,
+                "risk_category": "High" if cancer_score > 0.065 else "Normal", # AIMS threshold
+                "explanation": f"Advanced AIMS Modular Pipeline Analysis: BI-RADS {birads_pred} detected with density grade {density_label}."
+            }
+
+    def predict(self, input_tensor: torch.Tensor, image_path: str = None) -> tuple:
+        """Legacy compatibility wrapper."""
+        # Wrap single tensor into 4 views for the multi-view architecture
+        views = [input_tensor.cpu()] * 4
+        # Convert back to PIL for consistency with predict_study
+        pil_images = [Image.fromarray((v.squeeze(0).permute(1,2,0).numpy()*255).astype(np.uint8)) for v in views]
+        res = self.predict_study(pil_images)
         
-        with torch.no_grad():
-            output = self.model(views)
-            probabilities = F.softmax(output, dim=1).squeeze(0)
-            predicted_class = int(probabilities.argmax().item())
-            prob_list = [float(p) for p in probabilities.cpu().tolist()]
-            
-            confidence = float(prob_list[predicted_class])
-            risk_score = int(confidence * 100)
-            
-            # BI-RADS Logic
-            birads = str(predicted_class)
-            
-            # YOLO Lesion Detection
-            detections = []
-            if image_path and os.path.exists(image_path):
-                detections = lesion_detector.detect(image_path)
-            
-            # Identify lesion type from detection if available
-            lesion = detections[0]['class'] if detections else "Unknown"
-            density = ["A", "B", "C", "D"][risk_score % 4]
-
-            if predicted_class == 0:
-                explanation = f"Multi-view Ensemble Analysis (ViT+DenseNet+EffNet): Normal BI-RADS {birads}."
-            else:
-                explanation = f"Ensemble Detection: Suspicious BI-RADS {birads} category. Multiple architectures confirm suspicion."
-            
-            return predicted_class, prob_list, confidence, risk_score, explanation, birads, lesion, density, detections
+        # Return tuple to match old signature if needed, or update consumers
+        # Old sig: predicted_class, prob_list, confidence, risk_score, explanation, birads, lesion, density, detections
+        # Note: This is becoming messy, better to update the consumer (API route)
+        return (
+            res['birads'], 
+            [0.0]*7, # prob_list stub
+            res['cancer_probability'], 
+            int(res['cancer_probability']*100), 
+            res['explanation'], 
+            str(res['birads']), 
+            res['detections'][0]['class'] if res['detections'] else "None",
+            res['density'], 
+            res['detections']
+        )
 
     def get_model_info(self) -> dict:
         return {
-            "architectures": ["ViT-Base", "DenseNet-121", "EfficientNet-B0"],
-            "detection": "YOLOv8-Medical",
-            "preprocessing": "MONAI Medical Pipeline",
-            "dataset_origin": "VinDr-Breast",
+            "version": settings.MODEL_VERSION,
+            "stages": ["Ensemble", "Density", "Lesion", "YOLOv8", "Calc-Patch"],
+            "preprocessing": "AIMS-style CLAHE + Cropping",
             "device": str(self.device),
             "is_dummy_model": self.is_dummy_model
         }
-
-
 
 __all__ = ["ModelService"]

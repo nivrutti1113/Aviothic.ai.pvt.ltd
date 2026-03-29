@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from .routes import predict_router, auth_router, reporting_router
+from .routes import predict_router, auth_router, reporting_router, payments_router
 from .routes.dicomweb import router as dicomweb_router
 from .config import settings
 from .services.model_loader import ModelService
@@ -13,6 +13,8 @@ from .db import db
 from .middleware.logging import RequestLoggingMiddleware, ModelAuditMiddleware
 from .middleware.exceptions import exception_handlers
 from .middleware.ratelimit import limiter, rate_limit_middleware
+from .middleware.security import HardenedSecurityMiddleware, ModelInferenceThrottler
+from .core.audit import sec_auditor
 
 # Configure logging for medical audit compliance
 logging.basicConfig(
@@ -66,6 +68,8 @@ app.add_middleware(
 # Add security and monitoring middleware
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(ModelAuditMiddleware)
+app.add_middleware(HardenedSecurityMiddleware) # Global Security Headers (CSP, HSTS)
+app.add_middleware(ModelInferenceThrottler)    # Protects AI Models from Extraction Attacks
 
 
 @app.on_event("startup")
@@ -117,6 +121,15 @@ async def startup_event():
         logger.error(f"Failed to load model service: {e}")
         raise
     
+    # Initialize Audit Collection Indexes (Performance + Security)
+    try:
+        await db.db["security_audit_logs"].create_index([("timestamp", -1)])
+        await db.db["security_audit_logs"].create_index([("user_id", 1)])
+        logger.info("Security audit indexes optimized.")
+        await sec_auditor.log_event("SYSTEM_STARTUP", "SYSTEM", "SUCCESS")
+    except Exception as e:
+        logger.error(f"Failed to optimize audit indexes: {e}")
+    
     logger.info("Aviothic AI Backend startup completed successfully")
 
 
@@ -149,6 +162,7 @@ app.mount("/static", StaticFiles(directory=settings.STATIC_DIR), name="static")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(predict_router, prefix="/api/v1")
 app.include_router(reporting_router, prefix="/api/v1")
+app.include_router(payments_router, prefix="/api/v1")
 app.include_router(dicomweb_router, prefix="/api/v1")
 
 
