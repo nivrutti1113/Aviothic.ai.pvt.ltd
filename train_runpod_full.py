@@ -106,7 +106,20 @@ class MammographyDataset(Dataset):
     def _load_img(self, path):
         if self.is_demo:
             return torch.randn(3, 224, 224)
-        img = Image.open(path).convert('RGB')
+            
+        # 🚀 Aviothic Automatic Support for DICOM and PNG
+        if path.lower().endswith('.dcm'):
+            import pydicom
+            import numpy as np
+            dicom = pydicom.dcmread(path)
+            img_arr = dicom.pixel_array
+            # Normalize complex 16-bit DICOM array to standard 8-bit image
+            if img_arr.max() > 0:
+                img_arr = ((img_arr - img_arr.min()) / (img_arr.max() - img_arr.min()) * 255.0).astype(np.uint8)
+            img = Image.fromarray(img_arr).convert('RGB')
+        else:
+            img = Image.open(path).convert('RGB')
+            
         if self.transform:
             img = self.transform(img)
         return img
