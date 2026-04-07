@@ -113,7 +113,7 @@ For production, consider using MongoDB Atlas or a managed MongoDB service:
 
 ```bash
 # Example MongoDB Atlas connection string
-MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/database_name
+mongodb+srv://YOUR_USERNAME:YOUR_PASSWORD@YOUR_CLUSTER.mongodb.net/YOUR_DB
 ```
 
 ## Scaling
