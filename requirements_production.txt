@@ -1,0 +1,13 @@
+torch>=2.1.0
+torchvision
+timm
+pydicom
+pandas
+numpy
+scikit-learn
+tqdm
+Pillow
+pynvml
+optuna
+onnx
+onnxruntime-gpu

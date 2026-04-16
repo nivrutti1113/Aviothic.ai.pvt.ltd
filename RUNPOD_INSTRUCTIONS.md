@@ -15,30 +15,30 @@ cd Aviothic.ai.pvt.ltd
 ```
 
 ### 2. Install High-Performace Dependencies
-We use `timm` for the model ensemble and `tqdm` for tracking.
+We use `timm` for the model ensemble and `torch.compile` (PyTorch 2.1+).
 ```bash
-pip install -r requirements.txt
-pip install timm tqdm flash-attn --no-build-isolation
+pip install -r requirements_production.txt
 ```
 
 ---
 
 ## ⚡ Phase 2: Start the Training Engine
 
-### 🏃 Use the Master Training Script
-**DO NOT RUN THE NOTEBOOKS.** We have consolidated the logic from your research notebooks into a professional Python script (`train_runpod_full.py`). 
+### 🏃 Use the v2 Production Script
+**DO NOT RUN THE NOTEBOOKS.** We have consolidated the logic into **`train_production_v2.py`**. 
 
 **Why?** 
-- It uses **TF32** and **Torch Compile** (H100 exclusive speed boosts).
-- It handles training in the background (no browser required).
+- It uses **TF32**, **AMP**, and **Torch Compile** (Exclusive speed boosts).
+- It implements the **Full Ensemble** (ViT + Dense + EffNet).
+- It handles training in the background.
 
 ```bash
-# Basic Run
-python train_runpod_full.py --data_dir /workspace/data --batch_size 64
+# Basic Run (A100/H100 Optimized)
+python train_production_v2.py --batch_size 64 --workers 12
 
 # Recommended: Run in "Set-and-Forget" mode (keeps training if you disconnect)
 screen -S aviothic_train
-python train_runpod_full.py --data_dir /workspace/data --batch_size 64 --workers 16
+python train_production_v2.py --batch_size 64 --workers 12 --epochs 60
 # Press Ctrl+A, then D to detach. 
 # Re-attach later with: screen -r aviothic_train
 ```
